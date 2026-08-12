@@ -2,6 +2,7 @@ import { logger } from '@/services/monitoring/logger';
 
 let completeAudio: HTMLAudioElement | null = null;
 let messageAudio: HTMLAudioElement | null = null;
+let messageAudio: HTMLAudioElement | null = null;
 
 /** Plays the short "ding" effect used when a task or issue is marked complete. */
 export function playCompleteSound() {
@@ -20,7 +21,7 @@ export function playCompleteSound() {
 /** Plays the short notification chime used when a new chat message arrives. */
 export function playMessageSound() {
   if (!messageAudio) {
-    messageAudio = new Audio('/sounds/task-complete.mp3');
+    messageAudio = new Audio('/sounds/task-complete1.mp3');
     messageAudio.volume = 0.5;
   }
   // Restart from the beginning in case the previous play is still finishing.
