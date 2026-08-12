@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Send, Paperclip, Loader2, X, Smile, File as FileIcon, Users, CheckSquare, AlertCircle, Flag, Cpu, Layers, FileText, ChevronLeft, Plus, ArrowUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -109,12 +110,6 @@ function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Some browsers auto-boost/shrink text-node font-size in plain <div>s but exempt
-// form controls from that heuristic, which desyncs the mention overlay's font size
-// from the textarea's even though both declare the same Tailwind text-sm class.
-// Locking both to 100% keeps them pixel-matched.
-const TEXT_SIZE_ADJUST_STYLE = { WebkitTextSizeAdjust: '100%', textSizeAdjust: '100%' } as const;
-
 /** Byte ranges of recognized "@Name"/"@everyone" runs anywhere in the draft, for live blue highlighting. */
 function findKnownMentionRanges(value: string, knownNames: string[]): { start: number; end: number }[] {
   if (knownNames.length === 0) return [];
@@ -189,6 +184,7 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
   const isMobile = useIsMobile();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mentionOverlayRef = useRef<HTMLDivElement>(null);
+  const mentionOverlayRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const emojiButtonRef = useRef<HTMLButtonElement>(null);
@@ -239,6 +235,26 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
 
   // Total items in the mention dropdown (everyone slot + individual members)
   const totalMentionItems = (showEveryoneOption ? 1 : 0) + filteredMentions.length;
+
+  // Names Backspace is allowed to word-collapse a mention into (see findMentionWordBackspaceRange).
+  const knownMentionNames = useMemo(
+    () => [...otherMembers.map((m) => m.name), 'everyone'],
+    [otherMembers]
+  );
+
+  // Live blue highlighting for @mentions while composing: recognized "@Name"/"@everyone"
+  // runs anywhere in the draft, plus the mention query currently being typed (so the
+  // color appears immediately after "@", before the name is even complete).
+  const mentionHighlightNodes = useMemo(() => {
+    const ranges = findKnownMentionRanges(value, knownMentionNames);
+    if (mentionQuery !== null && mentionStartRef.current >= 0) {
+      ranges.push({
+        start: mentionStartRef.current,
+        end: mentionStartRef.current + 1 + mentionQuery.length,
+      });
+    }
+    return renderMentionOverlay(value, ranges);
+  }, [value, knownMentionNames, mentionQuery]);
 
   // Names Backspace is allowed to word-collapse a mention into (see findMentionWordBackspaceRange).
   const knownMentionNames = useMemo(
@@ -457,6 +473,13 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 144) + 'px';
+    if (mentionOverlayRef.current) mentionOverlayRef.current.scrollTop = el.scrollTop;
+  }, []);
+
+  const syncOverlayScroll = useCallback(() => {
+    if (textareaRef.current && mentionOverlayRef.current) {
+      mentionOverlayRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
     if (mentionOverlayRef.current) mentionOverlayRef.current.scrollTop = el.scrollTop;
   }, []);
 
@@ -743,6 +766,23 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
         return;
       }
       if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(null); mentionStartRef.current = -1; return; }
+    }
+    if (e.key === 'Backspace' && mentionQuery === null) {
+      const el = textareaRef.current;
+      if (el && el.selectionStart === el.selectionEnd) {
+        const cursorPos = el.selectionStart ?? 0;
+        const range = findMentionWordBackspaceRange(value, cursorPos, knownMentionNames);
+        if (range) {
+          e.preventDefault();
+          const newValue = value.substring(0, range.start) + value.substring(range.end);
+          setDraft(conversationId, newValue);
+          requestAnimationFrame(() => {
+            el.setSelectionRange(range.start, range.start);
+            el.focus();
+          });
+          return;
+        }
+      }
     }
     if (e.key === 'Backspace' && mentionQuery === null) {
       const el = textareaRef.current;
@@ -1142,12 +1182,11 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
 
             {/* Bordered message pill */}
             <div className="flex-1 min-w-0 flex items-center gap-1 rounded-full border border-input bg-background px-4 min-h-[42px] focus-within:ring-2 focus-within:ring-ring/70 transition-all">
-              <div className="relative flex-1 min-w-0 flex items-center">
+              <div className="relative flex-1 min-w-0">
                 <div
                   ref={mentionOverlayRef}
                   aria-hidden="true"
-                  className="absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden whitespace-pre-wrap break-words text-sm leading-5 max-h-[140px] pointer-events-none"
-                  style={TEXT_SIZE_ADJUST_STYLE}
+                  className="absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-sm leading-5 max-h-[140px] pointer-events-none"
                 >
                   {mentionHighlightNodes}
                 </div>
@@ -1161,7 +1200,6 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
                   placeholder="Type a message..."
                   rows={1}
                   className="relative w-full resize-none overflow-hidden bg-transparent text-sm leading-5 max-h-[140px] text-transparent caret-foreground placeholder:text-muted-foreground/90 focus-visible:outline-none"
-                  style={TEXT_SIZE_ADJUST_STYLE}
                   disabled={readOnly}
                 />
               </div>
@@ -1216,8 +1254,7 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
               <div
                 ref={mentionOverlayRef}
                 aria-hidden="true"
-                className="absolute inset-x-0 top-1/2 -translate-y-1/2 px-0.5 overflow-hidden whitespace-pre-wrap break-words text-sm leading-5 max-h-[140px] pointer-events-none"
-                style={TEXT_SIZE_ADJUST_STYLE}
+                className="absolute inset-0 px-0.5 overflow-hidden whitespace-pre-wrap break-words text-sm leading-5 max-h-[140px] pointer-events-none"
               >
                 {mentionHighlightNodes}
               </div>
@@ -1228,10 +1265,10 @@ export function MessageInput({ conversationId, onMessageSent, onTyping, members,
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 onScroll={syncOverlayScroll}
+                onScroll={syncOverlayScroll}
                 placeholder={otherMembers.length <= 1 ? 'Type a message...' : 'Type a message... Use @ to mention'}
                 rows={1}
                 className="relative w-full resize-none bg-transparent text-sm leading-5 max-h-[140px] text-transparent caret-foreground placeholder:text-muted-foreground/90 focus-visible:outline-none"
-                style={TEXT_SIZE_ADJUST_STYLE}
                 disabled={readOnly}
               />
               {showCharCount && (
